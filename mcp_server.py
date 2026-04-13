@@ -1,9 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 import json
 import os
+import uvicorn
 from datetime import datetime
 
 mcp = FastMCP("mental-health-mcp")
+app = mcp.sse_app()
 
 demographics_store = []
 
@@ -73,4 +75,5 @@ def save_to_file(record: dict):
         json.dump(existing, f, indent=2)
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
