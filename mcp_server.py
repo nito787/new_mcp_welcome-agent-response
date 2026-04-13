@@ -5,7 +5,7 @@ import uvicorn
 from datetime import datetime
 
 mcp = FastMCP("mental-health-mcp")
-app = mcp.sse_app()
+app = mcp.streamable_http_app()
 
 demographics_store = []
 
