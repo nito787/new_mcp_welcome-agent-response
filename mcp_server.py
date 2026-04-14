@@ -1,24 +1,20 @@
-from mcp.server.fastmcp import FastMCP
 import json
 import os
 import logging
 from datetime import datetime
+from typing import Any
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_server")
-_mcp_host = os.getenv("FASTMCP_HOST", "0.0.0.0")
-_mcp_port = int(os.getenv("PORT", "8000"))
-mcp = FastMCP(
-    "mental-health-mcp",
-    host=_mcp_host,
-    port=_mcp_port,
-    stateless_http=True,
-    json_response=True,
-)
+
+app = FastAPI()
 
 demographics_store = []
 
-@mcp.tool()
 def save_demographics(
     preferred_name: str,
     age: str,
@@ -53,7 +49,6 @@ def save_demographics(
         "message": f"Demographics for {preferred_name} saved successfully."
     }
 
-@mcp.tool()
 def get_demographics(record_id: int) -> dict:
     """Retrieve a saved demographics record by ID."""
     for record in demographics_store:
@@ -61,7 +56,6 @@ def get_demographics(record_id: int) -> dict:
             return record
     return {"status": "not_found", "message": f"No record found with id {record_id}"}
 
-@mcp.tool()
 def list_all_demographics() -> dict:
     """List all saved demographic records."""
     return {
@@ -83,6 +77,128 @@ def save_to_file(record: dict):
     with open(file_path, "w") as f:
         json.dump(existing, f, indent=2)
 
+
+def _jsonrpc_result(request_id: Any, result: Any) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+@app.get("/")
+async def root():
+    return {
+        "ok": True,
+        "service": "mental-health-mcp",
+        "mcp": "/mcp",
+        "health": "/health",
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/mcp")
+async def mcp_handler(request: Request):
+    try:
+        body = await request.json()
+        logger.info("Incoming MCP request: %s", body)
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content=_jsonrpc_error(None, -32700, "Parse error"),
+        )
+
+    request_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params", {})
+
+    # MCP initialize handshake
+    if method == "initialize":
+        return _jsonrpc_result(
+            request_id,
+            {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {"name": "mental-health-mcp", "version": "1.0.0"},
+                "capabilities": {"tools": {}},
+            },
+        )
+
+    if method == "notifications/initialized":
+        return JSONResponse(status_code=202, content={})
+
+    if method == "tools/list":
+        return _jsonrpc_result(
+            request_id,
+            {
+                "tools": [
+                    {
+                        "name": "save_demographics",
+                        "description": "Save user demographics collected by the welcome agent.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "preferred_name": {"type": "string"},
+                                "age": {"type": "string"},
+                                "consent": {"type": "boolean"},
+                                "preferred_language": {"type": "string"},
+                                "communication_preference": {"type": "string"},
+                                "session_notes": {"type": "string"},
+                                "user_communication_style": {"type": "string"},
+                            },
+                            "required": [
+                                "preferred_name",
+                                "age",
+                                "consent",
+                                "preferred_language",
+                                "communication_preference",
+                            ],
+                        },
+                    },
+                    {
+                        "name": "get_demographics",
+                        "description": "Retrieve a saved demographics record by ID.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"record_id": {"type": "integer"}},
+                            "required": ["record_id"],
+                        },
+                    },
+                    {
+                        "name": "list_all_demographics",
+                        "description": "List all saved demographic records.",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
+                ]
+            },
+        )
+
+    if method == "tools/call":
+        name = params.get("name")
+        arguments = params.get("arguments", {})
+        try:
+            if name == "save_demographics":
+                result = save_demographics(**arguments)
+            elif name == "get_demographics":
+                result = get_demographics(**arguments)
+            elif name == "list_all_demographics":
+                result = list_all_demographics()
+            else:
+                return _jsonrpc_error(request_id, -32601, f"Tool not found: {name}")
+        except Exception as exc:
+            return _jsonrpc_error(request_id, -32602, f"Invalid params: {exc}")
+
+        return _jsonrpc_result(
+            request_id,
+            {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False},
+        )
+
+    return _jsonrpc_error(request_id, -32601, f"Method not found: {method}")
+
 if __name__ == "__main__":
-    logger.info("Starting MCP streamable-http server on %s:%s", _mcp_host, _mcp_port)
-    mcp.run(transport="http")
+    port = int(os.environ.get("PORT", 8000))
+    logger.info("Starting JSON MCP server on 0.0.0.0:%s", port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
