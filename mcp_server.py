@@ -102,6 +102,7 @@ async def health():
 
 
 @app.post("/mcp")
+@app.post("/mcp/mcp_handler")
 async def mcp_handler(request: Request):
     try:
         body = await request.json()
