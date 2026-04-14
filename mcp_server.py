@@ -85,4 +85,4 @@ def save_to_file(record: dict):
 
 if __name__ == "__main__":
     logger.info("Starting MCP streamable-http server on %s:%s", _mcp_host, _mcp_port)
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="http")
