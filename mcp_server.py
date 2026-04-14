@@ -14,6 +14,12 @@ _mcp_host = os.getenv("FASTMCP_HOST", "0.0.0.0")
 mcp = FastMCP("mental-health-mcp", host=_mcp_host)
 app = mcp.streamable_http_app()
 
+# Some hosted MCP clients still use HTTP-over-SSE (GET /sse + POST /messages/).
+# Expose the same FastMCP instance on both transports so discovery can fall back.
+_sse_starlette = mcp.sse_app()
+for _route in _sse_starlette.routes:
+    app.routes.append(_route)
+
 
 async def _health(request):
     return PlainTextResponse("ok")
@@ -25,11 +31,14 @@ async def _root(request):
             "ok": True,
             "service": "mental-health-mcp",
             "mcp": "/mcp",
+            "sse": "/sse",
+            "messages": "/messages/",
             "health": "/health",
             "note": (
                 "Opening /mcp in a browser is not supported. Streamable MCP requires an MCP client that sends "
                 "Accept: text/event-stream on GET to /mcp, and Accept including both application/json and "
-                "text/event-stream on POST with Content-Type: application/json."
+                "text/event-stream on POST with Content-Type: application/json. "
+                "Clients that only support the older transport can use /sse and POST JSON-RPC to /messages/."
             ),
         }
     )
