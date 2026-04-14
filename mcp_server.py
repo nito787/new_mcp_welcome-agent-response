@@ -26,6 +26,11 @@ async def _root(request):
             "service": "mental-health-mcp",
             "mcp": "/mcp",
             "health": "/health",
+            "note": (
+                "Opening /mcp in a browser is not supported. Streamable MCP requires an MCP client that sends "
+                "Accept: text/event-stream on GET to /mcp, and Accept including both application/json and "
+                "text/event-stream on POST with Content-Type: application/json."
+            ),
         }
     )
 
