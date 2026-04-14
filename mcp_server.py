@@ -4,8 +4,35 @@ import os
 import uvicorn
 from datetime import datetime
 
-mcp = FastMCP("mental-health-mcp")
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
+
+# FastMCP defaults host=127.0.0.1, which enables DNS rebinding protection with
+# Host allowed only for localhost. Railway sends Host: <name>.up.railway.app → "Invalid Host header".
+# Binding metadata host to 0.0.0.0 skips that default so public deployments work.
+_mcp_host = os.getenv("FASTMCP_HOST", "0.0.0.0")
+mcp = FastMCP("mental-health-mcp", host=_mcp_host)
 app = mcp.streamable_http_app()
+
+
+async def _health(request):
+    return PlainTextResponse("ok")
+
+
+async def _root(request):
+    return JSONResponse(
+        {
+            "ok": True,
+            "service": "mental-health-mcp",
+            "mcp": "/mcp",
+            "health": "/health",
+        }
+    )
+
+
+# Railway and browsers hit GET / — the MCP app only registers /mcp.
+app.routes.insert(0, Route("/health", endpoint=_health, methods=["GET", "HEAD"]))
+app.routes.insert(0, Route("/", endpoint=_root, methods=["GET", "HEAD"]))
 
 demographics_store = []
 
