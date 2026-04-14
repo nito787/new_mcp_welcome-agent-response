@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import sys
 from datetime import datetime
 from typing import Any
 
@@ -8,7 +9,12 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(levelname)s:%(name)s:%(message)s",
+    force=True,
+)
 logger = logging.getLogger("mcp_server")
 
 app = FastAPI()
@@ -106,7 +112,6 @@ async def health():
 async def mcp_handler(request: Request):
     try:
         body = await request.json()
-        logger.info("Incoming MCP request: %s", body)
     except Exception:
         return JSONResponse(
             status_code=400,
