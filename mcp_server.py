@@ -118,13 +118,20 @@ async def mcp_handler(request: Request):
     params = body.get("params", {})
 
     # Some MCP clients/proxies send wrapper-style method names instead of
-    # canonical MCP JSON-RPC names. Normalize them for compatibility.
+    # canonical MCP JSON-RPC names. Normalize only known wrappers.
     method_aliases = {
         "mcp_initialize": "initialize",
         "mcp_list_tools": "tools/list",
         "mcp_call_tool": "tools/call",
     }
-    method = method_aliases.get(method, method)
+    canonical_methods = {
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "tools/call",
+    }
+    if method not in canonical_methods and method in method_aliases:
+        method = method_aliases[method]
 
     # MCP initialize handshake
     if method == "initialize":
@@ -148,7 +155,7 @@ async def mcp_handler(request: Request):
                     {
                         "name": "save_demographics",
                         "description": "Save user demographics collected by the welcome agent.",
-                        "inputSchema": {
+                        "input_schema": {
                             "type": "object",
                             "properties": {
                                 "preferred_name": {"type": "string"},
@@ -166,21 +173,27 @@ async def mcp_handler(request: Request):
                                 "preferred_language",
                                 "communication_preference",
                             ],
+                            "additionalProperties": False,
                         },
                     },
                     {
                         "name": "get_demographics",
                         "description": "Retrieve a saved demographics record by ID.",
-                        "inputSchema": {
+                        "input_schema": {
                             "type": "object",
                             "properties": {"record_id": {"type": "integer"}},
                             "required": ["record_id"],
+                            "additionalProperties": False,
                         },
                     },
                     {
                         "name": "list_all_demographics",
                         "description": "List all saved demographic records.",
-                        "inputSchema": {"type": "object", "properties": {}},
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
                     },
                 ]
             },
@@ -203,12 +216,12 @@ async def mcp_handler(request: Request):
 
         return _jsonrpc_result(
             request_id,
-            {"content": [{"type": "text", "text": json.dumps(result)}], "isError": False},
+             result,
         )
 
     return _jsonrpc_error(request_id, -32601, f"Method not found: {method}")
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8001))
     logger.info("Starting JSON MCP server on 0.0.0.0:%s", port)
     uvicorn.run(app, host="0.0.0.0", port=port)
