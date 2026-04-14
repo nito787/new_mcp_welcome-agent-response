@@ -2,79 +2,19 @@ from mcp.server.fastmcp import FastMCP
 import json
 import os
 import logging
-import uvicorn
 from datetime import datetime
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, PlainTextResponse
-from starlette.routing import Route
-
-# FastMCP defaults host=127.0.0.1, which enables DNS rebinding protection with
-# Host allowed only for localhost. Railway sends Host: <name>.up.railway.app → "Invalid Host header".
-# Binding metadata host to 0.0.0.0 skips that default so public deployments work.
-_mcp_host = os.getenv("FASTMCP_HOST", "0.0.0.0")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_server")
-mcp = FastMCP("mental-health-mcp", host=_mcp_host, json_response=True)
-app = mcp.streamable_http_app()
-
-# Some hosted MCP clients still use HTTP-over-SSE (GET /sse + POST /messages/).
-# Expose the same FastMCP instance on both transports so discovery can fall back.
-_sse_starlette = mcp.sse_app()
-for _route in _sse_starlette.routes:
-    app.routes.append(_route)
-
-
-class MCPRequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        if request.method == "POST" and request.url.path == "/mcp":
-            body = await request.body()
-            try:
-                payload = json.loads(body.decode("utf-8")) if body else {}
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                payload = {"raw_body": body.decode("utf-8", errors="replace")}
-
-            logger.info("Incoming MCP request: %s", payload)
-
-            # Re-inject request body so downstream MCP transport can read it.
-            async def receive():
-                return {"type": "http.request", "body": body, "more_body": False}
-
-            request._receive = receive
-
-        return await call_next(request)
-
-
-app.add_middleware(MCPRequestLoggingMiddleware)
-
-
-async def _health(request):
-    return PlainTextResponse("ok")
-
-
-async def _root(request):
-    return JSONResponse(
-        {
-            "ok": True,
-            "service": "mental-health-mcp",
-            "mcp": "/mcp",
-            "sse": "/sse",
-            "messages": "/messages/",
-            "health": "/health",
-            "note": (
-                "Opening /mcp in a browser is not supported. Streamable MCP requires an MCP client that sends "
-                "Accept: text/event-stream on GET to /mcp, and Accept including both application/json and "
-                "text/event-stream on POST with Content-Type: application/json. "
-                "This server also supports JSON-mode MCP responses for non-streaming platforms. "
-                "Clients that only support the older transport can use /sse and POST JSON-RPC to /messages/."
-            ),
-        }
-    )
-
-
-# Railway and browsers hit GET / — the MCP app only registers /mcp.
-app.routes.insert(0, Route("/health", endpoint=_health, methods=["GET", "HEAD"]))
-app.routes.insert(0, Route("/", endpoint=_root, methods=["GET", "HEAD"]))
+_mcp_host = os.getenv("FASTMCP_HOST", "0.0.0.0")
+_mcp_port = int(os.getenv("PORT", "8000"))
+mcp = FastMCP(
+    "mental-health-mcp",
+    host=_mcp_host,
+    port=_mcp_port,
+    stateless_http=True,
+    json_response=True,
+)
 
 demographics_store = []
 
@@ -144,5 +84,5 @@ def save_to_file(record: dict):
         json.dump(existing, f, indent=2)
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    logger.info("Starting MCP streamable-http server on %s:%s", _mcp_host, _mcp_port)
+    mcp.run(transport="streamable-http")
