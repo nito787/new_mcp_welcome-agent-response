@@ -116,6 +116,15 @@ async def mcp_handler(request: Request):
     method = body.get("method")
     params = body.get("params", {})
 
+    # Some MCP clients/proxies send wrapper-style method names instead of
+    # canonical MCP JSON-RPC names. Normalize them for compatibility.
+    method_aliases = {
+        "mcp_initialize": "initialize",
+        "mcp_list_tools": "tools/list",
+        "mcp_call_tool": "tools/call",
+    }
+    method = method_aliases.get(method, method)
+
     # MCP initialize handshake
     if method == "initialize":
         return _jsonrpc_result(
