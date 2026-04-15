@@ -139,6 +139,17 @@ def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+def _mcp_tool(name: str, description: str, input_schema: dict) -> dict:
+    """Build a Tool dict; duplicate schema keys for clients that rename camelCase."""
+    schema_copy = json.loads(json.dumps(input_schema))
+    return {
+        "name": name,
+        "description": description,
+        "inputSchema": input_schema,
+        "input_schema": schema_copy,
+    }
+
+
 init_db()
 
 
@@ -170,7 +181,8 @@ async def mcp_handler(request: Request):
 
     request_id = body.get("id")
     method = body.get("method")
-    params = body.get("params", {})
+    raw_params = body.get("params")
+    params = raw_params if isinstance(raw_params, dict) else {}
 
     # Some MCP clients/proxies send wrapper-style method names instead of
     # canonical MCP JSON-RPC names. Normalize only known wrappers.
@@ -203,56 +215,53 @@ async def mcp_handler(request: Request):
         return JSONResponse(status_code=202, content={})
 
     if method == "tools/list":
-        return _jsonrpc_result(
-            request_id,
-            {
-                "tools": [
-                    {
-                        "name": "save_demographics",
-                        "description": "Save user demographics collected by the welcome agent.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {
-                                "preferred_name": {"type": "string"},
-                                "age": {"type": "string"},
-                                "consent": {"type": "boolean"},
-                                "preferred_language": {"type": "string"},
-                                "communication_preference": {"type": "string"},
-                                "session_notes": {"type": "string"},
-                                "user_communication_style": {"type": "string"},
-                            },
-                            "required": [
-                                "preferred_name",
-                                "age",
-                                "consent",
-                                "preferred_language",
-                                "communication_preference",
-                            ],
-                            "additionalProperties": False,
-                        },
-                    },
-                    {
-                        "name": "get_demographics",
-                        "description": "Retrieve a saved demographics record by ID.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"record_id": {"type": "integer"}},
-                            "required": ["record_id"],
-                            "additionalProperties": False,
-                        },
-                    },
-                    {
-                        "name": "list_all_demographics",
-                        "description": "List all saved demographic records.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {},
-                            "additionalProperties": False,
-                        },
-                    },
-                ]
+        # MCP: canonical key is inputSchema (object with type "object"). Some proxies
+        # expose snake_case only; include input_schema as a copy for compatibility.
+        save_schema = {
+            "type": "object",
+            "properties": {
+                "preferred_name": {"type": "string"},
+                "age": {"type": "string"},
+                "consent": {"type": "boolean"},
+                "preferred_language": {"type": "string"},
+                "communication_preference": {"type": "string"},
+                "session_notes": {"type": "string"},
+                "user_communication_style": {"type": "string"},
             },
-        )
+            "required": [
+                "preferred_name",
+                "age",
+                "consent",
+                "preferred_language",
+                "communication_preference",
+            ],
+        }
+        get_schema = {
+            "type": "object",
+            "properties": {"record_id": {"type": "integer"}},
+            "required": ["record_id"],
+        }
+        list_schema = {"type": "object", "properties": {}}
+        tools_payload = {
+            "tools": [
+                _mcp_tool(
+                    "save_demographics",
+                    "Save user demographics collected by the welcome agent.",
+                    save_schema,
+                ),
+                _mcp_tool(
+                    "get_demographics",
+                    "Retrieve a saved demographics record by ID.",
+                    get_schema,
+                ),
+                _mcp_tool(
+                    "list_all_demographics",
+                    "List all saved demographic records.",
+                    list_schema,
+                ),
+            ]
+        }
+        return JSONResponse(content=_jsonrpc_result(request_id, tools_payload))
 
     if method == "tools/call":
         name = params.get("name")
