@@ -1,11 +1,12 @@
 import json
 import os
 import logging
-import sqlite3
 import sys
 from datetime import datetime
 from typing import Any
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -20,36 +21,32 @@ logger = logging.getLogger("mcp_server")
 
 app = FastAPI()
 
-DB_PATH = os.environ.get("DB_PATH", "demographics.db")
-
-
-def _get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _get_connection():
+    return psycopg2.connect(os.environ["DATABASE_URL"])
 
 
 def init_db() -> None:
     with _get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS demographics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                preferred_name TEXT NOT NULL,
-                age TEXT NOT NULL,
-                consent INTEGER NOT NULL,
-                preferred_language TEXT NOT NULL,
-                communication_preference TEXT NOT NULL,
-                session_notes TEXT NOT NULL DEFAULT '',
-                user_communication_style TEXT NOT NULL DEFAULT '',
-                saved_at TEXT NOT NULL
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS demographics (
+                    id SERIAL PRIMARY KEY,
+                    preferred_name TEXT NOT NULL,
+                    age TEXT NOT NULL,
+                    consent BOOLEAN NOT NULL,
+                    preferred_language TEXT NOT NULL,
+                    communication_preference TEXT NOT NULL,
+                    session_notes TEXT DEFAULT '',
+                    user_communication_style TEXT DEFAULT '',
+                    saved_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        conn.commit()
+            conn.commit()
 
 
-def _row_to_record(row: sqlite3.Row) -> dict:
+def _row_to_record(row: dict) -> dict:
     return {
         "id": row["id"],
         "preferred_name": row["preferred_name"],
@@ -74,33 +71,35 @@ def save_demographics(
     """Save user demographics collected by the welcome agent."""
     saved_at = datetime.now().isoformat()
     with _get_connection() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO demographics (
-                preferred_name,
-                age,
-                consent,
-                preferred_language,
-                communication_preference,
-                session_notes,
-                user_communication_style,
-                saved_at
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO demographics (
+                    preferred_name,
+                    age,
+                    consent,
+                    preferred_language,
+                    communication_preference,
+                    session_notes,
+                    user_communication_style,
+                    saved_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    preferred_name,
+                    age,
+                    consent,
+                    preferred_language,
+                    communication_preference,
+                    session_notes,
+                    user_communication_style,
+                    saved_at,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                preferred_name,
-                age,
-                int(consent),
-                preferred_language,
-                communication_preference,
-                session_notes,
-                user_communication_style,
-                saved_at,
-            ),
-        )
-        conn.commit()
-        record_id = cursor.lastrowid
+            record_id = cur.fetchone()[0]
+            conn.commit()
 
     return {
         "status": "saved",
@@ -112,10 +111,12 @@ def save_demographics(
 def get_demographics(record_id: int) -> dict:
     """Retrieve a saved demographics record by ID."""
     with _get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM demographics WHERE id = ?",
-            (record_id,),
-        ).fetchone()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM demographics WHERE id = %s",
+                (record_id,),
+            )
+            row = cur.fetchone()
     if row:
         return _row_to_record(row)
     return {"status": "not_found", "message": f"No record found with id {record_id}"}
@@ -123,7 +124,9 @@ def get_demographics(record_id: int) -> dict:
 def list_all_demographics() -> dict:
     """List all saved demographic records."""
     with _get_connection() as conn:
-        rows = conn.execute("SELECT * FROM demographics ORDER BY id").fetchall()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM demographics ORDER BY id")
+            rows = cur.fetchall()
     records = [_row_to_record(row) for row in rows]
     return {
         "total": len(records),
