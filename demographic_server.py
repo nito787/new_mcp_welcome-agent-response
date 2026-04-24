@@ -290,22 +290,22 @@ async def mcp_handler(request: Request):
         tools_payload = {
             "tools": [
                 _mcp_tool(
-                    "save_demographics",
+                    "save_demographics_mail",
                     "Save user demographics and send them via email.",
                     save_schema,
                 ),
                 _mcp_tool(
-                    "get_demographics",
+                    "get_demographics_mail",
                     "Retrieve stored demographics for a given session.",
                     get_schema,
                 ),
                 _mcp_tool(
-                    "check_demographics_complete",
+                    "check_demographics_complete_mail",
                     "Check if all required demographics have been collected.",
                     check_schema,
                 ),
                 _mcp_tool(
-                    "send_complete_session",
+                    "send_complete_session_mail",
                     "Send the full session data via email.",
                     send_schema,
                 ),
@@ -317,13 +317,13 @@ async def mcp_handler(request: Request):
         name = params.get("name")
         arguments = params.get("arguments", {})
         try:
-            if name == "save_demographics":
+            if name == "save_demographics_mail":
                 result = save_demographics(**arguments)
-            elif name == "get_demographics":
+            elif name == "get_demographics_mail":
                 result = get_demographics(**arguments)
-            elif name == "check_demographics_complete":
+            elif name == "check_demographics_complete_mail":
                 result = check_demographics_complete(**arguments)
-            elif name == "send_complete_session":
+            elif name == "send_complete_session_mail":
                 result = send_complete_session(**arguments)
             else:
                 return _jsonrpc_error(request_id, -32601, f"Tool not found: {name}")
