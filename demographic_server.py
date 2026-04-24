@@ -20,11 +20,11 @@ logger = logging.getLogger("demographic_server")
 app = FastAPI()
 
 # ── Email config (set via environment variables) ──────────────────────────────
-SMTP_HOST     = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_HOST     = os.getenv("SMTP_HOST", "sandbox.smtp.mailtrap.io")
 SMTP_PORT     = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER     = os.getenv("SMTP_USER", "you@gmail.com")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-EMAIL_TO      = os.getenv("EMAIL_TO", "recipient@example.com")
+SMTP_USER     = os.getenv("SMTP_USER", "97248faf8c0303")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "af58c7a6623185")
+EMAIL_TO      = os.getenv("EMAIL_TO", "anita@example.com")
 
 # ── In-memory session store ────────────────────────────────────────────────────
 from dataclasses import dataclass, field, asdict
@@ -79,7 +79,7 @@ def save_demographics(
     ethnicity: Optional[str] = None,
     language: Optional[str] = None,
     preferred_channel: Optional[str] = None,
-) -> str:
+) -> dict:
     """Save user demographics and send them via email."""
     session = _get_or_create(session_id)
 
@@ -105,36 +105,40 @@ Preferred Channel: {session.preferred_channel or 'Not provided'}
     """.strip()
 
     ok = _send_email(f"[Demographics] Session {session_id}", body)
-    return (
-        f"✅ Demographics saved and emailed for session {session_id}."
-        if ok else
-        f"⚠️ Demographics saved locally but email failed for session {session_id}."
-    )
+    return {
+        "status": "saved" if ok else "saved_locally",
+        "session_id": session_id,
+        "message": "Demographics saved and emailed." if ok else "Demographics saved locally but email failed.",
+        "emailed": ok
+    }
 
 
-def get_demographics(session_id: str) -> str:
+def get_demographics(session_id: str) -> dict:
     """Retrieve stored demographics for a given session."""
     session = _sessions.get(session_id)
     if not session or (not session.name and not session.region):
-        return f"⚠️ No demographics found for session {session_id}."
+        return {"status": "not_found", "message": f"No demographics found for session {session_id}"}
 
-    return f"""
-📋 Demographics — Session {session_id}
-  Name:              {session.name or 'Not provided'}
-  Gender:            {session.gender or 'Not provided'}
-  Age Range:         {session.age_range or 'Not provided'}
-  Region:            {session.region or 'Not provided'}
-  Ethnicity:         {session.ethnicity or 'Not provided'}
-  Language:          {session.language or 'Not provided'}
-  Preferred Channel: {session.preferred_channel or 'Not provided'}
-""".strip()
+    return {
+        "status": "found",
+        "session_id": session_id,
+        "demographics": {
+            "name": session.name,
+            "gender": session.gender,
+            "age_range": session.age_range,
+            "region": session.region,
+            "ethnicity": session.ethnicity,
+            "language": session.language,
+            "preferred_channel": session.preferred_channel
+        }
+    }
 
 
-def check_demographics_complete(session_id: str) -> str:
+def check_demographics_complete(session_id: str) -> dict:
     """Check if all required demographics have been collected."""
     session = _sessions.get(session_id)
     if not session:
-        return f"⚠️ Session {session_id} not found."
+        return {"status": "not_found", "message": f"Session {session_id} not found."}
 
     required = {
         "Name": session.name,
@@ -145,16 +149,18 @@ def check_demographics_complete(session_id: str) -> str:
     }
     missing = [k for k, v in required.items() if not v]
 
-    if not missing:
-        return f"✅ All required demographics complete for session {session_id}."
-    return f"⚠️ Missing for session {session_id}: {', '.join(missing)}"
+    return {
+        "session_id": session_id,
+        "complete": not missing,
+        "missing": missing if missing else None
+    }
 
 
 def send_complete_session(session_id: str) -> str:
     """Send the full session data via email."""
     session = _sessions.get(session_id)
     if not session or (not session.name and not session.region):
-        return f"⚠️ Cannot send — no demographics for session {session_id}."
+        return {"status": "error", "message": f"Cannot send — no demographics for session {session_id}."}
 
     data = asdict(session)
     body = "Complete Session Report\n" + "=" * 40 + "\n"
@@ -162,11 +168,11 @@ def send_complete_session(session_id: str) -> str:
         body += f"{k.replace('_', ' ').title()}: {v or 'Not provided'}\n"
 
     ok = _send_email(f"[Complete Session] {session_id}", body)
-    return (
-        f"✅ Complete session emailed for {session_id}."
-        if ok else
-        f"❌ Failed to send email for session {session_id}."
-    )
+    return {
+        "status": "sent" if ok else "failed",
+        "session_id": session_id,
+        "message": "Complete session emailed." if ok else "Failed to send email."
+    }
 
 
 def _jsonrpc_result(request_id: Any, result: Any) -> dict:
