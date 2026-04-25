@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 import smtplib
@@ -242,6 +242,20 @@ def _mcp_tool(name: str, description: str, input_schema: dict) -> dict:
         "inputSchema": input_schema,
     }
 
+
+def _mcp_tool_result(payload: Any) -> dict:
+    """Return MCP tool result in the shape expected by strict clients."""
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(payload, ensure_ascii=True),
+            }
+        ],
+        "structuredContent": payload,
+        "isError": False,
+    }
+
 init_db()
 
 # ----------------------------------------------------------------
@@ -306,10 +320,18 @@ async def mcp_handler(request: Request):
     method = body.get("method")
     params = body.get("params", {})
 
-    if method == "initialize":
+    # JSON-RPC notifications do not include id and must not return JSON-RPC errors.
+    if method == "notifications/initialized":
+        return Response(status_code=202)
+
+    if method in ("initialize", "mcp/initialize"):
         return _jsonrpc_result(request_id, {
             "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
+            "capabilities": {
+                "tools": {
+                    "listChanged": False
+                }
+            },
             "serverInfo": {"name": "mental-health-mcp", "version": "1.0"}
         })
 
@@ -324,6 +346,7 @@ async def mcp_handler(request: Request):
                 "language":  {"type": "string"},
             },
             "required": ["name", "age_range", "region", "ethnicity", "language"],
+            "additionalProperties": False,
         }
 
         return _jsonrpc_result(request_id, {
@@ -332,11 +355,13 @@ async def mcp_handler(request: Request):
                 _mcp_tool("get_demographics", "Get record", {
                     "type": "object",
                     "properties": {"record_id": {"type": "integer"}},
-                    "required": ["record_id"]
+                    "required": ["record_id"],
+                    "additionalProperties": False
                 }),
                 _mcp_tool("list_all_demographics", "List all", {
                     "type": "object",
-                    "properties": {}
+                    "properties": {},
+                    "additionalProperties": False
                 }),
             ]
         })
@@ -355,7 +380,7 @@ async def mcp_handler(request: Request):
             else:
                 return _jsonrpc_error(request_id, -32601, "Tool not found")
 
-            return _jsonrpc_result(request_id, result)
+            return _jsonrpc_result(request_id, _mcp_tool_result(result))
 
         except Exception as e:
             return _jsonrpc_error(request_id, -32602, str(e))
