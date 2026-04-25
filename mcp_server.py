@@ -5,8 +5,6 @@ import sys
 from datetime import datetime
 from typing import Any
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -34,42 +32,79 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "af58c7a6623185")
 EMAIL_TO      = os.getenv("EMAIL_TO", "anita@example.com")
 EMAIL_FROM    = os.getenv("EMAIL_FROM", SMTP_USER)
 
-# ---------------- DB ----------------
+# ---------------- DB SETUP ----------------
+# Set DATABASE_URL in your environment to switch between databases:
+#   Local SQLite  : leave DATABASE_URL unset (default)
+#   Production PG : DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+USE_POSTGRES = DATABASE_URL.startswith("postgresql") or DATABASE_URL.startswith("postgres")
+
+if USE_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+    logger.info("Using PostgreSQL")
+else:
+    import sqlite3
+    logger.info("Using SQLite")
+
+
 def _get_connection():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        db_path = os.getenv("DATABASE_PATH", "demographics.db")
+        return sqlite3.connect(db_path)
+
+
+def _placeholder():
+    # PostgreSQL uses %s, SQLite uses ?
+    return "%s" if USE_POSTGRES else "?"
 
 
 def init_db() -> None:
     with _get_connection() as conn:
-        with conn.cursor() as cur:
+        cur = conn.cursor()
+        if USE_POSTGRES:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS demographics (
                     id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    gender TEXT NOT NULL,
-                    age_range TEXT NOT NULL,
-                    region TEXT NOT NULL,
-                    ethnicity TEXT NOT NULL,
-                    language TEXT NOT NULL,
-                    preferred_channel TEXT NOT NULL,
+                    name TEXT,
+                    age_range TEXT,
+                    region TEXT,
+                    ethnicity TEXT,
+                    language TEXT,
                     saved_at TEXT NOT NULL
                 )
                 """
             )
-            conn.commit()
+        else:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS demographics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    age_range TEXT,
+                    region TEXT,
+                    ethnicity TEXT,
+                    language TEXT,
+                    saved_at TEXT NOT NULL
+                )
+                """
+            )
+        conn.commit()
 
 
 def _row_to_record(row: dict) -> dict:
     return {
         "id": row["id"],
         "name": row["name"],
-        "gender": row["gender"],
         "age_range": row["age_range"],
         "region": row["region"],
         "ethnicity": row["ethnicity"],
         "language": row["language"],
-        "preferred_channel": row["preferred_channel"],
         "saved_at": row["saved_at"],
     }
 
@@ -83,12 +118,10 @@ New Demographics Record
 
 ID: {data.get('id')}
 Name: {data.get('name')}
-Gender: {data.get('gender')}
 Age Range: {data.get('age_range')}
 Region: {data.get('region')}
 Ethnicity: {data.get('ethnicity')}
 Language: {data.get('language')}
-Preferred Channel: {data.get('preferred_channel')}
 Saved At: {data.get('saved_at')}
         """
 
@@ -112,93 +145,86 @@ Saved At: {data.get('saved_at')}
 # ---------------- CORE FUNCTIONS ----------------
 def save_demographics(
     name: str,
-    gender: str,
     age_range: str,
     region: str,
     ethnicity: str,
     language: str,
-    preferred_channel: str,
 ) -> dict:
 
     saved_at = datetime.now().isoformat()
+    p = _placeholder()
 
     with _get_connection() as conn:
-        with conn.cursor() as cur:
+        cur = conn.cursor()
+
+        if USE_POSTGRES:
             cur.execute(
-                """
-                INSERT INTO demographics (
-                    name,
-                    gender,
-                    age_range,
-                    region,
-                    ethnicity,
-                    language,
-                    preferred_channel,
-                    saved_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                f"""
+                INSERT INTO demographics (name, age_range, region, ethnicity, language, saved_at)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p})
                 RETURNING id
                 """,
-                (
-                    name,
-                    gender,
-                    age_range,
-                    region,
-                    ethnicity,
-                    language,
-                    preferred_channel,
-                    saved_at,
-                ),
+                (name, age_range, region, ethnicity, language, saved_at),
             )
             record_id = cur.fetchone()[0]
-            conn.commit()
+        else:
+            cur.execute(
+                f"""
+                INSERT INTO demographics (name, age_range, region, ethnicity, language, saved_at)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p})
+                """,
+                (name, age_range, region, ethnicity, language, saved_at),
+            )
+            record_id = cur.lastrowid
+
+        conn.commit()
 
     result = {
         "status": "saved",
         "id": record_id,
         "name": name,
-        "gender": gender,
         "age_range": age_range,
         "region": region,
         "ethnicity": ethnicity,
         "language": language,
-        "preferred_channel": preferred_channel,
         "saved_at": saved_at,
     }
 
-    # 🔥 send email
     send_email_notification(result)
-
     return result
 
 
 def get_demographics(record_id: int) -> dict:
+    p = _placeholder()
+
     with _get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM demographics WHERE id = %s",
-                (record_id,),
-            )
-            row = cur.fetchone()
+        if USE_POSTGRES:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+        cur.execute(f"SELECT * FROM demographics WHERE id = {p}", (record_id,))
+        row = cur.fetchone()
 
     if row:
-        return _row_to_record(row)
-
+        return _row_to_record(dict(row))
     return {"status": "not_found"}
 
 
 def list_all_demographics() -> dict:
     with _get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM demographics ORDER BY id")
-            rows = cur.fetchall()
+        if USE_POSTGRES:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
 
-    records = [_row_to_record(row) for row in rows]
+        cur.execute("SELECT * FROM demographics ORDER BY id")
+        rows = cur.fetchall()
 
-    return {
-        "total": len(records),
-        "records": records
-    }
+    records = [_row_to_record(dict(row)) for row in rows]
+    return {"total": len(records), "records": records}
 
 # ---------------- JSON RPC ----------------
 def _jsonrpc_result(request_id: Any, result: Any) -> dict:
@@ -210,17 +236,54 @@ def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict:
 
 
 def _mcp_tool(name: str, description: str, input_schema: dict) -> dict:
-    schema_copy = json.loads(json.dumps(input_schema))
     return {
         "name": name,
         "description": description,
         "inputSchema": input_schema,
-        "input_schema": schema_copy,
     }
 
 init_db()
 
-# ---------------- ROUTES ----------------
+# ----------------------------------------------------------------
+# AUTH BYPASS
+# ----------------------------------------------------------------
+
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_metadata(request: Request):
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({
+        "issuer": base,
+        "registration_endpoint": f"{base}/register",
+        "token_endpoint": f"{base}/token",
+        "authorization_endpoint": f"{base}/authorize",
+        "response_types_supported": ["token"],
+        "grant_types_supported": ["client_credentials"],
+        "token_endpoint_auth_methods_supported": ["none"],
+    })
+
+
+@app.post("/register")
+async def oauth_register(request: Request):
+    return JSONResponse(status_code=201, content={
+        "client_id": "no-auth-client",
+        "client_secret": "no-auth-secret",
+        "grant_types": ["client_credentials"],
+        "token_endpoint_auth_method": "none",
+    })
+
+
+@app.post("/token")
+async def oauth_token(request: Request):
+    return JSONResponse({
+        "access_token": "no-auth-token",
+        "token_type": "Bearer",
+        "expires_in": 99999999,
+        "scope": "mcp",
+    })
+
+# ----------------------------------------------------------------
+
+
 @app.get("/")
 async def root():
     return {"ok": True, "service": "mental-health-mcp"}
@@ -244,48 +307,39 @@ async def mcp_handler(request: Request):
     params = body.get("params", {})
 
     if method == "initialize":
-        return _jsonrpc_result(request_id, {"protocolVersion": "1.0"})
+        return _jsonrpc_result(request_id, {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "mental-health-mcp", "version": "1.0"}
+        })
 
     if method == "tools/list":
         save_schema = {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
-                "gender": {"type": "string"},
+                "name":      {"type": "string"},
                 "age_range": {"type": "string"},
-                "region": {"type": "string"},
+                "region":    {"type": "string"},
                 "ethnicity": {"type": "string"},
-                "language": {"type": "string"},
-                "preferred_channel": {"type": "string"},
+                "language":  {"type": "string"},
             },
-            "required": [
-                "name",
-                "gender",
-                "age_range",
-                "region",
-                "ethnicity",
-                "language",
-                "preferred_channel",
-            ],
+            "required": ["name", "age_range", "region", "ethnicity", "language"],
         }
 
-        return _jsonrpc_result(
-            request_id,
-            {
-                "tools": [
-                    _mcp_tool("save_demographics", "Save demographics", save_schema),
-                    _mcp_tool("get_demographics", "Get record", {
-                        "type": "object",
-                        "properties": {"record_id": {"type": "integer"}},
-                        "required": ["record_id"]
-                    }),
-                    _mcp_tool("list_all_demographics", "List all", {
-                        "type": "object",
-                        "properties": {}
-                    }),
-                ]
-            },
-        )
+        return _jsonrpc_result(request_id, {
+            "tools": [
+                _mcp_tool("save_demographics", "Save demographics", save_schema),
+                _mcp_tool("get_demographics", "Get record", {
+                    "type": "object",
+                    "properties": {"record_id": {"type": "integer"}},
+                    "required": ["record_id"]
+                }),
+                _mcp_tool("list_all_demographics", "List all", {
+                    "type": "object",
+                    "properties": {}
+                }),
+            ]
+        })
 
     if method == "tools/call":
         name = params.get("name")
