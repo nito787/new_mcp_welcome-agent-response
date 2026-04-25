@@ -97,6 +97,41 @@ def init_db() -> None:
         conn.commit()
 
 
+def ensure_demographics_schema() -> None:
+    """Backfill missing demographics columns for existing databases."""
+    expected_columns = {
+        "name": "TEXT",
+        "age_range": "TEXT",
+        "region": "TEXT",
+        "ethnicity": "TEXT",
+        "language": "TEXT",
+        "saved_at": "TEXT",
+    }
+
+    with _get_connection() as conn:
+        cur = conn.cursor()
+
+        if USE_POSTGRES:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'demographics'
+                """
+            )
+            existing_columns = {row[0] for row in cur.fetchall()}
+        else:
+            cur.execute("PRAGMA table_info(demographics)")
+            existing_columns = {row[1] for row in cur.fetchall()}
+
+        for column, col_type in expected_columns.items():
+            if column not in existing_columns:
+                cur.execute(f"ALTER TABLE demographics ADD COLUMN {column} {col_type}")
+                logger.warning("Added missing column '%s' to demographics", column)
+
+        conn.commit()
+
+
 def _row_to_record(row: dict) -> dict:
     return {
         "id": row["id"],
@@ -257,6 +292,7 @@ def _mcp_tool_result(payload: Any) -> dict:
     }
 
 init_db()
+ensure_demographics_schema()
 
 # ----------------------------------------------------------------
 # AUTH BYPASS
