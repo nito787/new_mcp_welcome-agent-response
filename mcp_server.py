@@ -2,6 +2,7 @@ import json
 import os
 import logging
 import sys
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -31,6 +32,7 @@ SMTP_USER     = os.getenv("SMTP_USER", "97248faf8c0303")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "af58c7a6623185")
 EMAIL_TO      = os.getenv("EMAIL_TO", "anita@example.com")
 EMAIL_FROM    = os.getenv("EMAIL_FROM", SMTP_USER)
+SMTP_TIMEOUT  = float(os.getenv("SMTP_TIMEOUT", "8"))
 
 # ---------------- DB SETUP ----------------
 # Set DATABASE_URL in your environment to switch between databases:
@@ -167,7 +169,7 @@ Saved At: {data.get('saved_at')}
 
         msg.attach(MIMEText(body, "plain"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
@@ -176,6 +178,11 @@ Saved At: {data.get('saved_at')}
 
     except Exception as e:
         logger.error(f"Email failed: {e}")
+
+
+def send_email_notification_async(data: dict) -> None:
+    """Do not block tool responses on SMTP/network delays."""
+    threading.Thread(target=send_email_notification, args=(data,), daemon=True).start()
 
 # ---------------- CORE FUNCTIONS ----------------
 def save_demographics(
@@ -225,7 +232,7 @@ def save_demographics(
         "saved_at": saved_at,
     }
 
-    send_email_notification(result)
+    send_email_notification_async(result)
     return result
 
 
