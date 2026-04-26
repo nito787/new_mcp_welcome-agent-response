@@ -146,7 +146,7 @@ def _row_to_record(row: dict) -> dict:
     }
 
 # ---------------- EMAIL ----------------
-def send_email_notification(data: dict) -> None:
+def send_email_notification_old(data: dict) -> None:
     try:
         subject = f"New Demographics Saved: {data['name']}"
 
@@ -178,7 +178,40 @@ Saved At: {data.get('saved_at')}
 
     except Exception as e:
         logger.error(f"Email failed: {e}")
+import resend
 
+# SMTP config wali lines hatao ya rehne do (koi farq nahi padega)
+
+def send_email_notification(data: dict) -> None:
+    try:
+        resend.api_key = os.environ["RESEND_API_KEY"]
+
+        subject = f"New Demographics Saved: {data['name']}"
+
+        body = f"""
+New Demographics Record
+
+ID: {data.get('id')}
+Name: {data.get('name')}
+Age Range: {data.get('age_range')}
+Region: {data.get('region')}
+Ethnicity: {data.get('ethnicity')}
+Language: {data.get('language')}
+Saved At: {data.get('saved_at')}
+        """
+
+        params = {
+            "from": "onboarding@resend.dev",  # Test ke liye yahi use karo
+            "to": [os.getenv("EMAIL_TO", "anita.afraz@f3technologies.eu")],
+            "subject": subject,
+            "text": body,
+        }
+
+        resend.Emails.send(params)
+        logger.info("Email sent successfully")
+
+    except Exception as e:
+        logger.error(f"Email failed: {e}")
 
 def send_email_notification_async(data: dict) -> None:
     """Do not block tool responses on SMTP/network delays."""
